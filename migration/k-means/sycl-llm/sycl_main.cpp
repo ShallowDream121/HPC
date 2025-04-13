@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     // Call SYCL implementation of K-means
     clusters = sycl_kmeans(objects, numCoords, numObjs, numClusters, threshold,
                            membership, &loop_iterations);
-
+                      
     free(objects[0]);
     free(objects);
 

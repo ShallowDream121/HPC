@@ -83,7 +83,11 @@ public:
         int gid = item.get_global_id(0);
 
         // Load data into local memory
-        localData[tid] = (gid < numIntermediates_) ? intermediates_[gid] : 0;
+        if (gid < numIntermediates_) {
+            localData[tid] = intermediates_[gid];
+        } else {
+            localData[tid] = 0;
+        }
         item.barrier(sycl::access::fence_space::local_space);
 
         // Perform reduction
@@ -140,62 +144,60 @@ float** sycl_kmeans(float** objects, int numCoords, int numObjs, int numClusters
     // SYCL queue and buffers
     sycl::queue q;
     {
-    sycl::buffer<float, 1> deviceObjects(dimObjects[0], sycl::range<1>(numCoords * numObjs));
-    sycl::buffer<float, 1> deviceClusters(dimClusters[0], sycl::range<1>(numCoords * numClusters));
-    sycl::buffer<int, 1> deviceMembership(membership, sycl::range<1>(numObjs));
-    sycl::buffer<int, 1> deviceIntermediates(sycl::range<1>(nextPowerOfTwo(numObjs)));
+        sycl::buffer<float, 1> deviceObjects(dimObjects[0], sycl::range<1>(numCoords * numObjs));
+        sycl::buffer<float, 1> deviceClusters(dimClusters[0], sycl::range<1>(numCoords * numClusters));
+        sycl::buffer<int, 1> deviceMembership(membership, sycl::range<1>(numObjs));
+        sycl::buffer<int, 1> deviceIntermediates(sycl::range<1>(nextPowerOfTwo(numObjs)));
 
-    const int numThreadsPerClusterBlock = 128;
-    const int numClusterBlocks = (numObjs + numThreadsPerClusterBlock - 1) / numThreadsPerClusterBlock;
+        const int numThreadsPerClusterBlock = 128;
+        const int numClusterBlocks = (numObjs + numThreadsPerClusterBlock - 1) / numThreadsPerClusterBlock;
 
-    do {
-    q.submit([&](sycl::handler& h) {
-    auto objects_acc = deviceObjects.get_access<sycl::access::mode::read>(h);
-    auto clusters_acc = deviceClusters.get_access<sycl::access::mode::read>(h);
-    auto membership_acc = deviceMembership.get_access<sycl::access::mode::read_write>(h);
-    auto intermediates_acc = deviceIntermediates.get_access<sycl::access::mode::write>(h);
+        do {
+            q.submit([&](sycl::handler& h) {
+                auto objects_acc = deviceObjects.get_access<sycl::access::mode::read>(h);
+                auto clusters_acc = deviceClusters.get_access<sycl::access::mode::read>(h);
+                auto membership_acc = deviceMembership.get_access<sycl::access::mode::read_write>(h);
+                auto intermediates_acc = deviceIntermediates.get_access<sycl::access::mode::write>(h);
 
-    h.parallel_for(sycl::nd_range<1>(numClusterBlocks * numThreadsPerClusterBlock, numThreadsPerClusterBlock),
-                FindNearestCluster(numCoords, numObjs, numClusters,
-                                    objects_acc.get_pointer(), clusters_acc.get_pointer(),
-                                    membership_acc.get_pointer(), intermediates_acc.get_pointer()));
-    });
-
-    q.submit([&](sycl::handler& h) {
-    auto intermediates_acc = deviceIntermediates.get_access<sycl::access::mode::read_write>(h);
-    sycl::local_accessor<int, 1> localData(sycl::range<1>(numThreadsPerClusterBlock), h);
-    h.parallel_for(sycl::nd_range<1>(numThreadsPerClusterBlock, numThreadsPerClusterBlock),
-                [=](sycl::nd_item<1> item) {
-                    ComputeDelta computeDelta(intermediates_acc.get_pointer(), numClusterBlocks);
-                    computeDelta(item, localData);
-                });
-    });
-
-    q.wait();
-
-    // Compute delta
-    auto intermediates_host = deviceIntermediates.get_access<sycl::access::mode::read>();
-    delta = static_cast<float>(intermediates_host[0]) / numObjs;
-
-    // Update membership and cluster centers
-    auto membership_host = deviceMembership.get_access<sycl::access::mode::read>();
-    for (i = 0; i < numObjs; i++) {
-    index = membership_host[i];
-    newClusterSize[index]++;
-    for (j = 0; j < numCoords; j++) {
-        newClusters[j][index] += objects[i][j];
-    }
-    }
-
-    for (i = 0; i < numClusters; i++) {
-    for (j = 0; j < numCoords; j++) {
-        if (newClusterSize[i] > 0)
-            dimClusters[j][i] = newClusters[j][i] / newClusterSize[i];
-        newClusters[j][i] = 0.0f;
-    }
-    newClusterSize[i] = 0;
-    }
-    } while (delta > threshold && loop++ < 500);
+                h.parallel_for(sycl::nd_range<1>(numClusterBlocks * numThreadsPerClusterBlock, numThreadsPerClusterBlock),
+                            FindNearestCluster(numCoords, numObjs, numClusters,
+                                                objects_acc.get_pointer(), clusters_acc.get_pointer(),
+                                                membership_acc.get_pointer(), intermediates_acc.get_pointer()));
+            });
+            
+            q.submit([&](sycl::handler& h) {
+                auto intermediates_acc = deviceIntermediates.get_access<sycl::access::mode::read_write>(h);
+                sycl::local_accessor<int, 1> localData(sycl::range<1>(numThreadsPerClusterBlock), h);
+            
+                h.parallel_for(sycl::nd_range<1>(numThreadsPerClusterBlock, numThreadsPerClusterBlock),
+                               [=](sycl::nd_item<1> item) {
+                                   ComputeDelta computeDelta(intermediates_acc.get_pointer(), numClusterBlocks);
+                                   computeDelta(item, localData);
+                               });
+            });
+            q.wait(); // while running kernels, segamention fault happened
+            // Compute delta
+            auto intermediates_host = deviceIntermediates.get_access<sycl::access::mode::read>();
+            delta = static_cast<float>(intermediates_host[0]) / numObjs;
+        
+            // Update membership and cluster centers
+            auto membership_host = deviceMembership.get_access<sycl::access::mode::read>();
+            for (i = 0; i < numObjs; i++) {
+                index = membership_host[i];
+                newClusterSize[index]++;
+                for (j = 0; j < numCoords; j++) {
+                    newClusters[j][index] += objects[i][j];
+                }
+            }
+            for (i = 0; i < numClusters; i++) {
+                for (j = 0; j < numCoords; j++) {
+                    if (newClusterSize[i] > 0)
+                        dimClusters[j][i] = newClusters[j][i] / newClusterSize[i];
+                    newClusters[j][i] = 0.0f;
+                }
+                newClusterSize[i] = 0;
+            }
+        } while (delta > threshold && loop++ < 500);
     }
 
     *loop_iterations = loop + 1;
