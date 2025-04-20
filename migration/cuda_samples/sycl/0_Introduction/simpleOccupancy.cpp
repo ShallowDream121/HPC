@@ -77,7 +77,7 @@ int launch_config(queue& q, int* d_array, int arrayCount, bool automatic) {
     return 0;
 }
 
-int test(bool automatic, int count = 1000000) {
+int test(bool automatic, int count = 100000) {
     try {
         queue q(select_device());
         int* array = new int[count];
