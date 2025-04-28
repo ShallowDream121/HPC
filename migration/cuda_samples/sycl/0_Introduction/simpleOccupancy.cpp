@@ -28,7 +28,7 @@ double report_potential_occupancy(queue& q, int blockSize) {
     return static_cast<double>(active_warps) / max_warps;
 }
 
-int launch_config(queue& q, int* d_array, int arrayCount, bool automatic) {
+int launch_config(queue& q, int64_t* d_array, int arrayCount, bool automatic) {
     int blockSize;
     int gridSize;
     double occupancy;
@@ -80,18 +80,18 @@ int launch_config(queue& q, int* d_array, int arrayCount, bool automatic) {
 int test(bool automatic, int count = 100000) {
     try {
         queue q(select_device());
-        int* array = new int[count];
-        int* d_array = malloc_device<int>(count, q);
+        int64_t* array = new int64_t[count];  // from int to int64_t
+        int64_t* d_array = malloc_device<int64_t>(count, q);
 
         // 初始化数据
         for (int i = 0; i < count; ++i) array[i] = i;
-        q.memcpy(d_array, array, count * sizeof(int)).wait();
+        q.memcpy(d_array, array, count * sizeof(int64_t)).wait();
 
         // 执行内核
         int status = launch_config(q, d_array, count, automatic);
 
         // 验证结果
-        q.memcpy(array, d_array, count * sizeof(int)).wait();
+        q.memcpy(array, d_array, count * sizeof(int64_t)).wait();
         free(d_array, q);
 
         for (int i = 0; i < count; ++i) {
